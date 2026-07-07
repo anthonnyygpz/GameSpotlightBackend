@@ -1,10 +1,13 @@
 const jwt = require('jsonwebtoken');
+const db  = require('../config/db');
 
 /**
  * Verifica el JWT enviado en el header Authorization: Bearer <token>.
+ * Además de la firma y expiración, valida que la sesión siga activa en DB
+ * (para que el logout invalide el token correctamente).
  * Adjunta req.userId y req.userRole al request.
  */
-const verifyToken = (req, res, next) => {
+const verifyToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) {
         return res.status(403).json({ success: false, message: 'Token no proporcionado' });
@@ -17,17 +20,46 @@ const verifyToken = (req, res, next) => {
 
     const token = parts[1];
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-        if (err) {
-            const message = err.name === 'TokenExpiredError'
-                ? 'Token expirado'
-                : 'Token inválido';
-            return res.status(401).json({ success: false, message });
+    // 1) Verificar firma y expiración del JWT
+    let decoded;
+    try {
+        decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+        const message = err.name === 'TokenExpiredError' ? 'Token expirado' : 'Token inválido';
+        return res.status(401).json({ success: false, message });
+    }
+
+    // 2) Verificar que la sesión siga activa en DB (invalida tras logout)
+    try {
+        const [sessions] = await db.execute(
+            `SELECT session_id FROM sessions WHERE token = ? AND active = TRUE LIMIT 1`,
+            [token]
+        );
+
+        if (sessions.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: 'Sesión inválida o cerrada. Inicia sesión nuevamente.',
+            });
         }
-        req.userId   = decoded.userId;
-        req.userRole = decoded.role || 'viewer';
-        return next();
-    });
+    } catch (dbErr) {
+        return next(dbErr);
+    }
+
+    // 3) Actualizar last_login del usuario en cada petición autenticada
+    //    Esto garantiza que el token de registro también actualice last_login
+    try {
+        await db.execute(
+            `UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = ?`,
+            [decoded.userId]
+        );
+    } catch (_) {
+        // No fatal: continuar aunque falle el update de last_login
+    }
+
+    req.userId   = decoded.userId;
+    req.userRole = decoded.role || 'viewer';
+    return next();
 };
 
 /**
