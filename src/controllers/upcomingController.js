@@ -4,6 +4,7 @@ const db = require('../config/db');
 /**
  * Devuelve todos los próximos lanzamientos con datos del juego y géneros.
  * Usado por UpcomingReleasesScreen en Flutter.
+ * El objeto 'game' anidado usa los campos en formato Flutter (snake_case en español).
  */
 exports.getAll = async (req, res, next) => {
     try {
@@ -52,23 +53,26 @@ exports.getAll = async (req, res, next) => {
         );
 
         const data = rows.map(row => ({
-            releaseId:          row.release_id,
-            releaseDate:        row.release_date,
-            releaseWindow:      row.release_window,
-            releaseDescription: row.release_description,
-            releaseBanner:      row.release_banner,
-            releaseFeatured:    !!row.release_featured,
+            release_id:          row.release_id || '',
+            release_date:        row.release_date
+                                   ? new Date(row.release_date).toISOString().split('T')[0]
+                                   : null,
+            release_window:      row.release_window      || null,
+            release_description: row.release_description || '',
+            release_banner:      row.release_banner      || null,
+            release_featured:    !!row.release_featured,
+            // Juego en formato GameModel.fromJson de Flutter
             game: {
-                gameId:      row.game_id,
-                title:       row.title,
-                slug:        row.slug,
-                description: row.description,
-                coverImage:  row.cover_image,
-                bannerUrl:   row.banner_url,
-                developer:   row.developer,
-                publisher:   row.publisher,
-                genres:      row.genres    || '',
-                platforms:   row.platforms || '',
+                id_juego:       row.game_id     || '',
+                titulo:         row.title       || '',
+                slug:           row.slug        || '',
+                sinopsis:       row.description || '',
+                imagen_portada: row.cover_image || '',
+                banner_url:     row.banner_url  || '',
+                desarrollador:  row.developer   || '',
+                editor:         row.publisher   || '',
+                generos:        row.genres      || '',
+                plataformas:    row.platforms   || '',
             },
         }));
 
@@ -113,7 +117,32 @@ exports.getById = async (req, res, next) => {
             return res.status(404).json({ success: false, message: 'Lanzamiento no encontrado' });
         }
 
-        return res.status(200).json({ success: true, data: rows[0] });
+        const row = rows[0];
+        return res.status(200).json({
+            success: true,
+            data: {
+                release_id:          row.release_id || '',
+                release_date:        row.release_date
+                                       ? new Date(row.release_date).toISOString().split('T')[0]
+                                       : null,
+                release_window:      row.release_window || null,
+                release_description: row.description    || '',
+                release_banner:      row.banner_url     || null,
+                release_featured:    !!row.featured,
+                game: {
+                    id_juego:       row.game_id     || '',
+                    titulo:         row.title       || '',
+                    slug:           row.slug        || '',
+                    sinopsis:       row.description || '',
+                    imagen_portada: row.cover_image || '',
+                    banner_url:     row.banner_url  || '',
+                    desarrollador:  row.developer   || '',
+                    editor:         row.publisher   || '',
+                    generos:        row.genres      || '',
+                    plataformas:    row.platforms   || '',
+                },
+            },
+        });
     } catch (err) {
         return next(err);
     }

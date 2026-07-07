@@ -48,10 +48,10 @@ exports.register = async (req, res, next) => {
 
         const passwordHash = await bcrypt.hash(password, 12);
 
-        // Insertar usuario (UUID generado por MySQL)
+        // Insertar usuario con last_login inicial (UUID generado por MySQL)
         await db.execute(
-            `INSERT INTO users (user_id, name, email, password_hash, country)
-             VALUES (UUID(), ?, ?, ?, ?)`,
+            `INSERT INTO users (user_id, name, email, password_hash, country, last_login)
+             VALUES (UUID(), ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
             [name, email, passwordHash, country || null]
         );
 

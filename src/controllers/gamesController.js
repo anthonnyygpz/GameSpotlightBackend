@@ -3,38 +3,87 @@ const db = require('../config/db');
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Convierte un string hexadecimal (#RRGGBB o RRGGBB) a formato que
- * Flutter puede parsear. Si es null, devuelve el color por defecto.
+ * Mapea una fila de la DB al formato que espera GameModel.fromJson() en Flutter.
+ * Todos los campos usan snake_case en español para coincidir con el modelo Dart.
  */
-const normalizeColor = (hex) => {
-    if (!hex) return '#000000';
-    return hex.startsWith('#') ? hex : `#${hex}`;
-};
-
-/**
- * Construye el objeto GameItem compatible con el modelo Flutter.
- */
-const buildGameItem = (row, category) => ({
-    id:            row.game_id,
-    title:         row.title,
-    subtitle:      row.description
-                     ? row.description.substring(0, 80).trim()
-                     : '',
-    gradientStart: normalizeColor(row.gradient_start),
-    gradientEnd:   normalizeColor(row.gradient_end),
-    badge:         row.badge        || null,
-    date:          row.release_date
-                     ? new Date(row.release_date).getFullYear().toString()
-                     : null,
-    category,
-    coverImageUrl: row.cover_image  || null,
-    bannerUrl:     row.banner_url   || null,
-    genres:        row.genres       || '',
-    platforms:     row.platforms    || '',
-    totalTrailers: row.total_trailers || 0,
-    featured:      !!row.featured,
-    status:        row.status,
+const buildGameItem = (row) => ({
+  id_juego: row.game_id || '',
+  titulo: row.title || '',
+  slug: row.slug || '',
+  sinopsis: row.description || '',
+  fecha_lanzamiento: row.release_date
+    ? new Date(row.release_date).toISOString().split('T')[0]
+    : '',
+  desarrollador: row.developer || '',
+  editor: row.publisher || '',
+  imagen_portada: row.cover_image || '',
+  banner_url: row.banner_url || '',
+  estado: row.status || '',
+  destacado: row.featured ? 'si' : 'no',
+  created_at: row.created_at ? new Date(row.created_at).toISOString() : '',
+  updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : '',
+  // Campos extra opcionales (se ignoran en GameModel pero útiles para la UI)
+  generos: row.genres || '',
+  plataformas: row.platforms || '',
+  total_trailers: row.total_trailers || 0,
 });
+
+// ─── GET /api/games ───────────────────────────────────────────────────────────
+/**
+ * Listado paginado de juegos activos con filtros opcionales.
+ */
+exports.getAllGames = async (req, res, next) => {
+  try {
+    const {
+      limit = 50,
+      offset = 0,
+      genre = null,
+      platform = null,
+      status = 'active',
+      featured = null,
+    } = req.query;
+
+    let whereClause = 'WHERE vg.status = ?';
+    const params = [status];
+
+    if (genre) {
+      whereClause += ' AND FIND_IN_SET(?, vg.genres)';
+      params.push(genre);
+    }
+    if (platform) {
+      whereClause += ' AND FIND_IN_SET(?, vg.platforms)';
+      params.push(platform);
+    }
+    if (featured !== null) {
+      whereClause += ' AND vg.featured = ?';
+      params.push(featured === 'true' ? 1 : 0);
+    }
+
+    const [rows] = await db.execute(
+      `SELECT * FROM v_games_full vg ${whereClause}
+             ORDER BY vg.featured DESC, vg.release_date DESC
+             LIMIT ? OFFSET ?`,
+      [...params, Number(limit), Number(offset)]
+    );
+
+    const [countRows] = await db.execute(
+      `SELECT COUNT(*) AS total FROM v_games_full vg ${whereClause}`,
+      params
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: rows.map(buildGameItem),
+      pagination: {
+        total: countRows[0].total,
+        limit: Number(limit),
+        offset: Number(offset),
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
 
 // ─── GET /api/games/home ──────────────────────────────────────────────────────
 /**
@@ -42,22 +91,21 @@ const buildGameItem = (row, category) => ({
  * Secciones: hero, trailers, upcoming, top_rated, new_releases
  */
 exports.getHomeGames = async (req, res, next) => {
-    try {
-        // 1) Hero: juegos destacados (featured = TRUE)
-        const [heroRows] = await db.execute(
-            `SELECT vg.*, NULL AS gradient_start, NULL AS gradient_end, NULL AS badge
+  try {
+    // 1) Hero: juegos destacados (featured = TRUE)
+    const [heroRows] = await db.execute(
+      `SELECT vg.*
              FROM v_games_full vg
              WHERE vg.featured = TRUE
              ORDER BY vg.created_at DESC
              LIMIT 5`
-        );
+    );
 
-        // 2) Trailers: un trailer oficial por juego
-        const [trailerRows] = await db.execute(
-            `SELECT g.game_id, g.title, g.description, g.cover_image, g.banner_url,
-                    g.release_date, g.featured, g.status,
+    // 2) Trailers: un trailer oficial por juego
+    const [trailerRows] = await db.execute(
+      `SELECT g.game_id, g.title, g.slug, g.description, g.cover_image, g.banner_url,
+                    g.release_date, g.featured, g.status, g.created_at, g.updated_at,
                     t.video_url, t.poster_url, t.title AS trailer_title, t.type AS trailer_type,
-                    NULL AS gradient_start, NULL AS gradient_end, NULL AS badge,
                     NULL AS genres, NULL AS platforms, 0 AS total_trailers
              FROM games g
              JOIN trailers t ON g.game_id = t.game_id
@@ -65,117 +113,113 @@ exports.getHomeGames = async (req, res, next) => {
              GROUP BY g.game_id
              ORDER BY t.sort_order ASC
              LIMIT 10`
-        );
+    );
 
-        // 3) Upcoming: próximos lanzamientos (fecha futura)
-        const [upcomingRows] = await db.execute(
-            `SELECT vg.*, ur.release_date AS upcoming_date, ur.release_window,
-                    ur.banner_url AS upcoming_banner, ur.featured AS up_featured,
-                    NULL AS gradient_start, NULL AS gradient_end, NULL AS badge
+    // 3) Upcoming: próximos lanzamientos
+    const [upcomingRows] = await db.execute(
+      `SELECT vg.*, ur.release_date AS upcoming_date, ur.release_window,
+                    ur.banner_url AS upcoming_banner, ur.featured AS up_featured
              FROM v_games_full vg
              JOIN upcoming_releases ur ON vg.game_id = ur.game_id
-             WHERE ur.release_date >= CURDATE() OR ur.release_date IS NULL
              ORDER BY ur.featured DESC, ur.release_date ASC
              LIMIT 10`
-        );
+    );
 
-        // 4) Top rated: juegos activos ordenados por created_at (placeholder ratings futuros)
-        const [topRatedRows] = await db.execute(
-            `SELECT vg.*, NULL AS gradient_start, NULL AS gradient_end, 'TOP' AS badge
+    // 4) Top rated: juegos activos no destacados con más trailers
+    const [topRatedRows] = await db.execute(
+      `SELECT vg.*
              FROM v_games_full vg
              WHERE vg.featured = FALSE
              ORDER BY vg.total_trailers DESC, vg.created_at DESC
              LIMIT 10`
-        );
+    );
 
-        // 5) New releases: lanzados recientemente (últimos 2 años)
-        const [newReleasesRows] = await db.execute(
-            `SELECT vg.*, NULL AS gradient_start, NULL AS gradient_end, 'NUEVO' AS badge
+    // 5) New releases: lanzados recientemente (últimos 3 años)
+    const [newReleasesRows] = await db.execute(
+      `SELECT vg.*
              FROM v_games_full vg
-             WHERE vg.release_date >= DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+             WHERE vg.release_date >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)
                AND vg.status = 'active'
              ORDER BY vg.release_date DESC
              LIMIT 10`
-        );
+    );
 
-        // Mapear trailerRows con campos extra (video_url)
-        const trailerItems = trailerRows.map(row => ({
-            ...buildGameItem(row, 'trailers'),
-            videoUrl:     row.video_url    || null,
-            posterUrl:    row.poster_url   || null,
-            trailerTitle: row.trailer_title || row.title,
-            trailerType:  row.trailer_type || 'official',
-        }));
+    // 6) Exclusives
+    const [exclusivesRows] = await db.execute(
+      `SELECT DISTINCT vg.*
+       FROM v_games_full vg
+       JOIN trailers t ON vg.game_id = t.game_id
+       JOIN trailer_categories tc ON t.trailer_id = tc.trailer_id
+       JOIN categories c ON tc.category_id = c.category_id
+       WHERE c.name = 'Exclusive'
+       ORDER BY vg.created_at DESC
+       LIMIT 10`
+    );
 
-        // Mapear upcomingRows con release_window
-        const upcomingItems = upcomingRows.map(row => ({
-            ...buildGameItem(row, 'upcoming'),
-            releaseWindow: row.release_window || null,
-        }));
-
-        const grouped = {
-            hero:         heroRows.map(r => buildGameItem(r, 'hero')),
-            trailers:     trailerItems,
-            upcoming:     upcomingItems,
-            top_rated:    topRatedRows.map(r => buildGameItem(r, 'top_rated')),
-            new_releases: newReleasesRows.map(r => buildGameItem(r, 'new_releases')),
-        };
-
-        return res.status(200).json({ success: true, data: grouped });
-    } catch (err) {
-        return next(err);
-    }
+    return res.status(200).json({
+      success: true,
+      data: {
+        hero: heroRows.map(buildGameItem),
+        trailers: trailerRows.map(buildGameItem),
+        upcoming: upcomingRows.map(buildGameItem),
+        top_rated: topRatedRows.map(buildGameItem),
+        new_releases: newReleasesRows.map(buildGameItem),
+        exclusives: exclusivesRows.map(buildGameItem),
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
 };
 
 // ─── GET /api/games/search?q=... ─────────────────────────────────────────────
 exports.searchGames = async (req, res, next) => {
-    try {
-        const { q = '', limit = 20, offset = 0 } = req.query;
+  try {
+    const { q = '', limit = 20, offset = 0 } = req.query;
 
-        if (!q.trim()) {
-            return res.status(422).json({ success: false, message: 'El parámetro q es requerido' });
-        }
+    if (!q.trim()) {
+      return res.status(422).json({ success: false, message: 'El parámetro q es requerido' });
+    }
 
-        const searchTerm = `%${q.trim()}%`;
+    const searchTerm = `%${q.trim()}%`;
 
-        const [rows] = await db.execute(
-            `SELECT vg.*
+    const [rows] = await db.execute(
+      `SELECT vg.*
              FROM v_games_full vg
              WHERE vg.title LIKE ? OR vg.genres LIKE ?
              ORDER BY vg.featured DESC, vg.release_date DESC
              LIMIT ? OFFSET ?`,
-            [searchTerm, searchTerm, Number(limit), Number(offset)]
-        );
+      [searchTerm, searchTerm, Number(limit), Number(offset)]
+    );
 
-        const [countRows] = await db.execute(
-            `SELECT COUNT(*) AS total
+    const [countRows] = await db.execute(
+      `SELECT COUNT(*) AS total
              FROM v_games_full vg
              WHERE vg.title LIKE ? OR vg.genres LIKE ?`,
-            [searchTerm, searchTerm]
-        );
+      [searchTerm, searchTerm]
+    );
 
-        return res.status(200).json({
-            success: true,
-            data: rows.map(r => buildGameItem(r, 'search')),
-            pagination: {
-                total:  countRows[0].total,
-                limit:  Number(limit),
-                offset: Number(offset),
-            },
-        });
-    } catch (err) {
-        return next(err);
-    }
+    return res.status(200).json({
+      success: true,
+      data: rows.map(buildGameItem),
+      pagination: {
+        total: countRows[0].total,
+        limit: Number(limit),
+        offset: Number(offset),
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
 };
 
 // ─── GET /api/games/:id ───────────────────────────────────────────────────────
 exports.getGameById = async (req, res, next) => {
-    try {
-        const { id } = req.params;
+  try {
+    const { id } = req.params;
 
-        // Datos base del juego
-        const [gameRows] = await db.execute(
-            `SELECT g.game_id, g.title, g.slug, g.description,
+    const [gameRows] = await db.execute(
+      `SELECT g.game_id, g.title, g.slug, g.description,
                     g.release_date, g.developer, g.publisher,
                     g.cover_image, g.banner_url, g.status, g.featured,
                     g.created_at, g.updated_at,
@@ -188,108 +232,55 @@ exports.getGameById = async (req, res, next) => {
              LEFT JOIN platforms      pl ON gp.platform_id = pl.platform_id
              WHERE g.game_id = ?
              GROUP BY g.game_id`,
-            [id]
-        );
+      [id]
+    );
 
-        if (gameRows.length === 0) {
-            return res.status(404).json({ success: false, message: 'Juego no encontrado' });
-        }
+    if (gameRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Juego no encontrado' });
+    }
 
-        // Trailers del juego
-        const [trailers] = await db.execute(
-            `SELECT t.trailer_id, t.title, t.type, t.video_url, t.poster_url, t.sort_order,
-                    GROUP_CONCAT(DISTINCT c.name SEPARATOR ', ') AS categories
+    const game = gameRows[0];
+
+    // Trailers del juego — en formato compatible con TrailerModel.fromJson de Flutter
+    const [trailerRows] = await db.execute(
+      `SELECT t.trailer_id, t.game_id, t.title, t.type, t.video_url,
+                    t.poster_url, t.sort_order, t.created_at,
+                    GROUP_CONCAT(DISTINCT c.category_id SEPARATOR ',') AS category_ids
              FROM trailers t
              LEFT JOIN trailer_categories tc ON t.trailer_id = tc.trailer_id
              LEFT JOIN categories         c  ON tc.category_id = c.category_id
              WHERE t.game_id = ?
              GROUP BY t.trailer_id
              ORDER BY t.sort_order ASC`,
-            [id]
-        );
+      [id]
+    );
 
-        const game = gameRows[0];
+    // Respuesta del juego en formato Flutter
+    const gameData = buildGameItem(game);
 
-        return res.status(200).json({
-            success: true,
-            data: {
-                gameId:      game.game_id,
-                title:       game.title,
-                slug:        game.slug,
-                description: game.description,
-                releaseDate: game.release_date,
-                developer:   game.developer,
-                publisher:   game.publisher,
-                coverImage:  game.cover_image,
-                bannerUrl:   game.banner_url,
-                status:      game.status,
-                featured:    !!game.featured,
-                genres:      game.genres || '',
-                platforms:   game.platforms || '',
-                createdAt:   game.created_at,
-                updatedAt:   game.updated_at,
-                trailers:    trailers.map(t => ({
-                    trailerId:  t.trailer_id,
-                    title:      t.title,
-                    type:       t.type,
-                    videoUrl:   t.video_url,
-                    posterUrl:  t.poster_url,
-                    sortOrder:  t.sort_order,
-                    categories: t.categories || '',
-                })),
-            },
-        });
-    } catch (err) {
-        return next(err);
-    }
-};
+    // Trailers en formato TrailerModel.fromJson()
+    const trailers = trailerRows.map(t => ({
+      id_trailer: t.trailer_id || '',
+      id_juego: t.game_id || '',
+      titulo: t.title || '',
+      url_video: t.video_url || '',
+      url_poster: t.poster_url || '',
+      duracion: t.duration || '',
+      orden: String(t.sort_order ?? '0'),
+      created_at: t.created_at ? new Date(t.created_at).toISOString() : '',
+      // Extra: tipo y categorías para uso futuro
+      tipo: t.type || 'official',
+      category_ids: t.category_ids ? t.category_ids.split(',') : [],
+    }));
 
-// ─── GET /api/games (listado paginado) ───────────────────────────────────────
-exports.getAllGames = async (req, res, next) => {
-    try {
-        const {
-            limit    = 20,
-            offset   = 0,
-            genre    = null,
-            platform = null,
-            status   = 'active',
-            featured = null,
-        } = req.query;
-
-        let whereClause = 'WHERE vg.status = ?';
-        const params = [status];
-
-        if (genre) {
-            whereClause += ' AND FIND_IN_SET(?, vg.genres)';
-            params.push(genre);
-        }
-        if (featured !== null) {
-            whereClause += ' AND vg.featured = ?';
-            params.push(featured === 'true' ? 1 : 0);
-        }
-
-        const [rows] = await db.execute(
-            `SELECT * FROM v_games_full ${whereClause}
-             ORDER BY vg.featured DESC, vg.release_date DESC
-             LIMIT ? OFFSET ?`,
-            [...params, Number(limit), Number(offset)]
-        );
-
-        const [countRows] = await db.execute(
-            `SELECT COUNT(*) AS total FROM v_games_full ${whereClause}`,
-            params
-        );
-
-        return res.status(200).json({
-            success: true,
-            data: rows.map(r => buildGameItem(r, 'list')),
-            pagination: {
-                total:  countRows[0].total,
-                limit:  Number(limit),
-                offset: Number(offset),
-            },
-        });
-    } catch (err) {
-        return next(err);
-    }
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...gameData,
+        trailers,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
 };
