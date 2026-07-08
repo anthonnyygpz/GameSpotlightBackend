@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { ApiError } from '../utils/apiError';
 
 interface AppError extends Error {
   code?: string;
@@ -12,7 +13,7 @@ interface AppError extends Error {
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const errorHandler = (
-  err: AppError,
+  err: AppError | ApiError,
   _req: Request,
   res: Response,
   _next: NextFunction,
@@ -20,6 +21,14 @@ const errorHandler = (
   // Log detallado en desarrollo
   if (process.env.NODE_ENV !== 'production') {
     console.error('[ERROR]', err.stack ?? err.message);
+  }
+
+  if (err instanceof ApiError) {
+    return res.status(err.statusCode).json({
+      success: false,
+      message: err.message,
+      code: 'API_ERROR',
+    });
   }
 
   // Error de duplicado MySQL (ER_DUP_ENTRY)
@@ -50,11 +59,11 @@ const errorHandler = (
   }
 
   // Error genérico del servidor
-  const status = err.statusCode ?? err.status ?? 500;
+  const status = ('statusCode' in err ? err.statusCode : undefined) ?? ('status' in err ? err.status : undefined) ?? 500;
   return res.status(status).json({
     success: false,
     message: err.message || 'Error interno del servidor',
-    code: err.code ?? 'INTERNAL_ERROR',
+    code: ('code' in err ? err.code : undefined) ?? 'INTERNAL_ERROR',
   });
 };
 
