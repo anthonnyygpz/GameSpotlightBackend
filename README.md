@@ -1,6 +1,6 @@
 # 🎮 GameSpotlight Backend
 
-REST API built with **Node.js + Express** and **MySQL** that powers the GameSpotlight app — providing game info, news, favorites, upcoming releases, and user notifications.
+REST API built with **Node.js + Express + TypeScript** and **MySQL** that powers the GameSpotlight app — providing game info, trailers, news, favorites, genres, platforms, upcoming releases, and user notifications.
 
 ---
 
@@ -9,6 +9,7 @@ REST API built with **Node.js + Express** and **MySQL** that powers the GameSpot
 - [Node.js](https://nodejs.org/) v18 or higher
 - [MySQL](https://www.mysql.com/) v8 or higher
 - npm v9 or higher
+- [TypeScript](https://www.typescriptlang.org/) v6 or higher (installed via devDependencies)
 
 ---
 
@@ -47,6 +48,10 @@ DB_HOST=localhost
 DB_USER=root
 DB_PASSWORD=your_password
 DB_NAME=game_spotlight
+
+# Auth
+JWT_SECRET=your_jwt_secret
+JWT_EXPIRES_IN=7d
 ```
 
 ### 4. Set up the database
@@ -61,10 +66,13 @@ mysql -u root -p game_spotlight < seed_data.sql
 ### 5. Start the server
 
 ```bash
-# Development (auto-restart on changes)
+# Development — auto-restart on changes (ts-node-dev)
 npm run dev
 
-# Production
+# Build for production
+npm run build
+
+# Run production build
 npm start
 ```
 
@@ -74,19 +82,34 @@ The server will start on `http://localhost:3000` by default.
 
 ## 📡 API Endpoints
 
-| Method | Endpoint | Description | Auth required |
-|--------|----------|-------------|:---:|
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|:----:|
 | `GET` | `/api/health` | Health check | ❌ |
 | `POST` | `/api/auth/register` | Register a new user | ❌ |
 | `POST` | `/api/auth/login` | Login and get JWT token | ❌ |
+| `POST` | `/api/auth/logout` | Logout current session | ✅ |
+| `GET` | `/api/auth/me` | Get own profile | ✅ |
+| `POST` | `/api/auth/forget-password` | Request password reset | ✅ |
+| `PUT` | `/api/auth/update-user` | Update authenticated user | ✅ |
 | `GET` | `/api/games/home` | Get home games list | ✅ |
 | `GET` | `/api/games/:id` | Get game details by ID | ✅ |
+| `GET` | `/api/trailers` | Get trailers | ✅ |
+| `GET` | `/api/categories` | Get categories | ✅ |
+| `GET` | `/api/trailer-categories` | Get trailer categories | ✅ |
 | `GET` | `/api/upcoming-releases` | Get upcoming game releases | ✅ |
 | `GET` | `/api/favorites` | Get user favorites | ✅ |
 | `POST` | `/api/favorites` | Add a game to favorites | ✅ |
-| `DELETE` | `/api/favorites/:id` | Remove a game from favorites | ✅ |
-| `GET` | `/api/news` | Get latest news | ✅ |
+| `DELETE` | `/api/favorites/:gameId` | Remove a game from favorites | ✅ |
+| `GET` | `/api/news` | Get latest news | ❌ |
 | `GET` | `/api/notifications` | Get user notifications | ✅ |
+| `GET` | `/api/users` | Get all users | ✅ |
+| `GET` | `/api/users/:id` | Get user by ID | ✅ |
+| `PUT` | `/api/users/:id` | Update a user | ✅ |
+| `DELETE` | `/api/users/:id` | Delete a user | ✅ |
+| `GET` | `/api/genres` | Get all genres | ❌ |
+| `GET` | `/api/genres/:id/games` | Get games by genre | ❌ |
+| `GET` | `/api/platforms` | Get all platforms | ❌ |
+| `GET` | `/api/platforms/:id/games` | Get games by platform | ❌ |
 
 > **Auth required**: include the JWT token in the `Authorization` header:
 > ```
@@ -100,39 +123,68 @@ The server will start on `http://localhost:3000` by default.
 ```
 src/
 ├── config/
-│   └── db.js                  # MySQL connection pool
+│   └── db.ts                      # MySQL connection pool
 ├── controllers/
-│   ├── authController.js
-│   ├── favoritesController.js
-│   ├── gamesController.js
-│   ├── newsController.js
-│   ├── notificationsController.js
-│   └── upcomingController.js
+│   ├── authController.ts
+│   ├── categoriesController.ts
+│   ├── favoritesController.ts
+│   ├── gamesController.ts
+│   ├── genresController.ts
+│   ├── newsController.ts
+│   ├── notificationsController.ts
+│   ├── platformsController.ts
+│   ├── trailersController.ts
+│   ├── upcomingController.ts
+│   └── userController.ts
 ├── middleware/
-│   ├── authMiddleware.js       # JWT verification
-│   ├── errorHandler.js        # Global error handler
-│   └── validate.js            # Request validation
+│   ├── authMiddleware.ts          # JWT verification
+│   ├── authValidators.ts          # Register & login validators
+│   ├── errorHandler.ts            # Global error handler
+│   └── validate.ts                # express-validator runner
 ├── routes/
-│   ├── authRoutes.js
-│   ├── favoritesRoutes.js
-│   ├── gamesRoutes.js
-│   ├── newsRoutes.js
-│   ├── notificationsRoutes.js
-│   └── upcomingRoutes.js
-└── server.js                  # Entry point
+│   ├── authRoutes.ts
+│   ├── categoriesRoutes.ts
+│   ├── favoritesRoutes.ts
+│   ├── gamesRoutes.ts
+│   ├── genresRoutes.ts
+│   ├── newsRoutes.ts
+│   ├── notificationsRoutes.ts
+│   ├── platformsRoutes.ts
+│   ├── trailerCategoriesRoutes.ts
+│   ├── trailersRoutes.ts
+│   ├── upcomingRoutes.ts
+│   └── usersRoutes.ts
+├── services/
+│   ├── authService.ts
+│   ├── genresService.ts
+│   └── platformsService.ts
+├── types/
+│   ├── auth.type.ts
+│   ├── genre.type.ts
+│   ├── index.ts
+│   ├── platform.type.ts
+│   ├── reponse.type.ts
+│   └── user.type.ts
+├── utils/
+│   └── apiError.ts                # Custom ApiError class
+└── server.ts                      # Entry point
 ```
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Runtime**: Node.js
-- **Framework**: Express v5
-- **Database**: MySQL 8 via `mysql2`
-- **Auth**: JSON Web Tokens (`jsonwebtoken`) + `bcrypt`
-- **Validation**: `express-validator`
-- **Logging**: `morgan`
-- **Env vars**: `dotenv`
+| Category | Technology |
+|----------|-----------|
+| **Runtime** | Node.js v18+ |
+| **Language** | TypeScript v6 |
+| **Framework** | Express v5 |
+| **Database** | MySQL 8 via `mysql2` |
+| **Auth** | JSON Web Tokens (`jsonwebtoken`) + `bcrypt` |
+| **Validation** | `express-validator` |
+| **Logging** | `morgan` |
+| **Env vars** | `dotenv` |
+| **Dev server** | `ts-node-dev` |
 
 ---
 
