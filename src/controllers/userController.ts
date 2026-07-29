@@ -131,3 +131,42 @@ export const deleteUser = async (req: AuthRequest, res: Response, next: NextFunc
     next(err);
   }
 };
+
+export const getSessions = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const userId = req.userId as string;
+
+    const [rows] = await db.execute<RowDataPacket[]>(
+      `SELECT session_id, ip_address, user_agent, started_at, active 
+       FROM sessions 
+       WHERE user_id = ? AND active = TRUE 
+       ORDER BY started_at DESC`,
+      [userId]
+    );
+
+    res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const revokeSession = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const userId = req.userId as string;
+    const { sessionId } = req.params;
+
+    const [result] = await db.execute<ResultSetHeader>(
+      `UPDATE sessions SET active = FALSE, ended_at = CURRENT_TIMESTAMP WHERE session_id = ? AND user_id = ?`,
+      [sessionId, userId]
+    );
+
+    if (result.affectedRows === 0) {
+      res.status(404).json({ success: false, message: "Sesión no encontrada o ya inactiva." });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: "Sesión revocada exitosamente." });
+  } catch (err) {
+    next(err);
+  }
+};
