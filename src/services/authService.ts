@@ -90,6 +90,73 @@ export const authService = {
     };
   },
 
+  async socialLogin(data: any, ip: string | null, userAgent: string | null): Promise<LoginResponse> {
+    const { provider, provider_id, email, name, avatar_url } = data;
+
+    const [users] = await db.execute<(UserRow & RowDataPacket)[]>(
+      `SELECT u.user_id, u.name, u.email, u.avatar_url, u.country, u.active, r.name AS role, u.google_id, u.playstation_id, u.registered_at
+       FROM users u LEFT JOIN user_roles ur ON u.user_id = ur.user_id LEFT JOIN roles r ON ur.role_id = r.role_id
+       WHERE u.email = ? LIMIT 1`,
+      [email]
+    );
+
+    let user: any;
+
+    if (users.length > 0) {
+      user = users[0];
+      if (!user.active) throw new Error('Cuenta desactivada');
+
+      const providerCol = provider === 'google' ? 'google_id' : 'playstation_id';
+      if (!user[providerCol]) {
+        await db.execute(`UPDATE users SET ${providerCol} = ? WHERE user_id = ?`, [provider_id, user.user_id]);
+      }
+    } else {
+      const providerCol = provider === 'google' ? 'google_id' : 'playstation_id';
+      const randomPassword = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-10);
+      const passwordHash = await bcrypt.hash(randomPassword, 12);
+      
+      await db.execute<ResultSetHeader>(
+        `INSERT INTO users (user_id, name, email, password_hash, avatar_url, ${providerCol}, last_login) VALUES (UUID(), ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [name || email.split('@')[0], email, passwordHash, avatar_url || null, provider_id]
+      );
+
+      const [newUsers] = await db.execute<(UserRow & RowDataPacket)[]>(
+        `SELECT u.user_id, u.name, u.email, u.registered_at FROM users u WHERE u.email = ?`, [email]
+      );
+      user = newUsers[0];
+
+      await db.execute<ResultSetHeader>(`INSERT INTO user_settings (settings_id, user_id) VALUES (UUID(), ?)`, [user.user_id]);
+
+      const [roles] = await db.execute<(RoleRow & RowDataPacket)[]>("SELECT role_id FROM roles WHERE name = 'viewer' LIMIT 1");
+      if (roles.length > 0) {
+        await db.execute<ResultSetHeader>(`INSERT INTO user_roles (id, user_id, role_id) VALUES (UUID(), ?, ?)`, [user.user_id, roles[0].role_id]);
+      }
+      user.role = 'viewer';
+    }
+
+    await db.execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = ?', [user.user_id]);
+
+    const role = user.role ?? 'viewer';
+    const token = jwt.sign({ userId: user.user_id, role }, process.env.JWT_SECRET as string, { expiresIn: '7d' });
+
+    await db.execute<ResultSetHeader>(
+      `INSERT INTO sessions (session_id, user_id, token, ip_address, user_agent) VALUES (UUID(), ?, ?, ?, ?)`,
+      [user.user_id, token, ip, userAgent]
+    );
+
+    return {
+      token_type: 'Bearer',
+      access_token: token,
+      expires_in: 604800,
+      user: {
+        id: user.user_id,
+        name: user.name,
+        email: user.email,
+        registered_at: user.registered_at
+      }
+    };
+  },
+
   async logout(token: string) {
     await db.execute(`UPDATE sessions SET active = FALSE, ended_at = CURRENT_TIMESTAMP WHERE token = ?`, [token]);
   },

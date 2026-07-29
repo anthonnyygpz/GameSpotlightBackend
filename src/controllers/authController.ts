@@ -25,6 +25,16 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
   }
 };
 
+export const socialLogin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const result = await authService.socialLogin(req.body, req.ip ?? null, req.headers['user-agent'] ?? null);
+    const reponse: ApiReponse<LoginResponse> = { success: true, message: 'Inicio de sesión social exitoso', data: result };
+    res.status(200).json(reponse);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const logout = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];

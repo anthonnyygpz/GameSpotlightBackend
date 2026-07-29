@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as auth from '../controllers/authController';
 import * as user from '../controllers/userController';
 import { verifyToken } from '../middleware/authMiddleware';
-import { registerValidators, loginValidators } from '../middleware/authValidators';
+import { registerValidators, loginValidators, socialLoginValidators } from '../middleware/authValidators';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -12,6 +12,9 @@ router.post('/register', registerValidators, validate, auth.register);
 
 // POST /api/auth/login
 router.post('/login', loginValidators, validate, auth.login);
+
+// POST /api/auth/social-login
+router.post('/social-login', socialLoginValidators, validate, auth.socialLogin);
 
 // POST /api/auth/logout  (requiere token)
 router.post('/logout', verifyToken, auth.logout);
